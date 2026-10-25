@@ -1,0 +1,197 @@
+name: Agent PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  ai-review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read AGENTS.md guidelines
+        id: read_agents
+        run: |
+          if [ -f "AGENTS.md" ]; then
+            echo "AGENTS_MD<<EOF" >> $GITHUB_ENV
+            cat AGENTS.md >> $GITHUB_ENV
+            echo "EOF" >> $GITHUB_ENV
+          else
+            echo "AGENTS_MD=No AGENTS.md found in repository." >> $GITHUB_ENV
+          fi
+
+      - name: Get PR Diff
+        id: get_diff
+        run: |
+          git diff origin/${{ github.base_ref }}...origin/${{ github.head_ref }} > pr_diff.txt
+          DIFF_SIZE=$(wc -c < pr_diff.txt)
+          echo "Diff size is $DIFF_SIZE bytes"
+
+      - name: Run Review & Post Verdict
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          python3 - << 'EOF'
+          import os
+          import sys
+          import json
+          import subprocess
+          import urllib.request
+          import urllib.error
+
+          api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+          pr_number = os.environ.get("PR_NUMBER", "")
+          agents_md = os.environ.get("AGENTS_MD", "")
+
+          if not api_key:
+              msg = (
+                  "### ⚠️ AI Review Skipped\n\n"
+                  "`GEMINI_API_KEY` secret is not configured in this repository.\n"
+                  "To enable automated agent reviews, add your API key under "
+                  "**Settings → Secrets and variables → Actions → GEMINI_API_KEY**."
+              )
+              subprocess.run(["gh", "pr", "comment", pr_number, "--body", msg])
+              sys.exit(0)
+
+          try:
+              with open("pr_diff.txt", "r", encoding="utf-8", errors="replace") as f:
+                  diff_text = f.read()
+          except Exception:
+              diff_text = ""
+
+          # Truncate very large diffs to fit context comfortably
+          if len(diff_text) > 20000:
+              diff_text = diff_text[:20000] + "\n\n...[diff truncated for length]..."
+
+          prompt = f"""You are an automated senior code reviewer reviewing a GitHub Pull Request.
+          Strictly evaluate the changes against the project guidelines specified below in AGENTS.md.
+
+          ### Project Guidelines (AGENTS.md):
+          {agents_md}
+
+          ### Git Diff:
+          {diff_text}
+
+          ### Tasks:
+          1. Verify safety rules (e.g. no secrets, mock keys, credentials).
+          2. Check commit conventions and code quality.
+          3. Determine if the PR should be approved or needs changes.
+
+          Respond ONLY with valid JSON matching this schema:
+          {{
+            "approved": true or false,
+            "summary": "Short 2-3 sentence summary of the review verdict",
+            "findings": ["bullet point 1", "bullet point 2"]
+          }}
+          """
+
+          # Dynamically query Google's ModelService to find available models for this key
+          models_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
+          available_models = []
+          try:
+              req = urllib.request.Request(models_url)
+              with urllib.request.urlopen(req) as resp:
+                  catalog = json.loads(resp.read().decode("utf-8"))
+                  for m in catalog.get("models", []):
+                      if "generateContent" in m.get("supportedGenerationMethods", []):
+                          available_models.append(m["name"])
+          except urllib.error.HTTPError as e:
+              err_body = e.read().decode("utf-8", errors="replace")
+              err_msg = f"### ⚠️ AI Review Encountered an Error\n\nFailed to list models with your API key: `{e}`\n\n```json\n{err_body}\n```"
+              subprocess.run(["gh", "pr", "comment", pr_number, "--body", err_msg])
+              sys.exit(0)
+          except Exception as e:
+              err_msg = f"### ⚠️ AI Review Encountered an Error\n\nFailed to connect to Google API: `{e}`"
+              subprocess.run(["gh", "pr", "comment", pr_number, "--body", err_msg])
+              sys.exit(0)
+
+          if not available_models:
+              err_msg = "### ⚠️ AI Review Encountered an Error\n\nNo models supporting `generateContent` were returned for this API key."
+              subprocess.run(["gh", "pr", "comment", pr_number, "--body", err_msg])
+              sys.exit(0)
+
+          # Sort and prioritize models (prefer gemini-3.8-flash as recommended by Google)
+          def model_score(name):
+              n = name.lower()
+              score = 0
+              if "3.8-flash" in n:
+                  score += 100
+              elif "3.8" in n:
+                  score += 90
+              elif "flash" in n:
+                  score += 50
+              elif "pro" in n:
+                  score += 40
+              if "2.5" in n or "1.5" in n:
+                  score -= 50
+              return score
+
+          candidate_models = sorted(available_models, key=model_score, reverse=True)
+          if "models/gemini-3.8-flash" not in candidate_models:
+              candidate_models.insert(0, "models/gemini-3.8-flash")
+
+          review_data = None
+          last_errors = []
+
+          for selected_model in candidate_models:
+              model_path = selected_model if selected_model.startswith("models/") else f"models/{selected_model}"
+              url = f"https://generativelanguage.googleapis.com/v1beta/{model_path}:generateContent?key={api_key}"
+              payload = {
+                  "contents": [{"parts": [{"text": prompt}]}],
+                  "generationConfig": {"responseMimeType": "application/json"}
+              }
+
+              req = urllib.request.Request(
+                  url,
+                  data=json.dumps(payload).encode("utf-8"),
+                  headers={"Content-Type": "application/json"},
+                  method="POST"
+              )
+
+              try:
+                  with urllib.request.urlopen(req) as resp:
+                      result = json.loads(resp.read().decode("utf-8"))
+                      raw_reply = result["candidates"][0]["content"]["parts"][0]["text"]
+                      review_data = json.loads(raw_reply)
+                      print(f"Successfully reviewed PR using model {model_path}")
+                      break
+              except urllib.error.HTTPError as e:
+                  err_body = e.read().decode("utf-8", errors="replace")
+                  last_errors.append(f"{model_path}: {e} -> {err_body}")
+                  continue
+              except Exception as e:
+                  last_errors.append(f"{model_path}: {e}")
+                  continue
+
+          if not review_data:
+              err_msg = "### ⚠️ AI Review Encountered an Error\n\nAll candidate models failed:\n\n" + "\n".join(f"- `{err}`" for err in last_errors[:3])
+              subprocess.run(["gh", "pr", "comment", pr_number, "--body", err_msg])
+              sys.exit(0)
+
+          approved = review_data.get("approved", False)
+          summary = review_data.get("summary", "Review completed.")
+          findings = review_data.get("findings", [])
+
+          status_badge = "✅ **Approved by Agent**" if approved else "⚠️ **Changes Requested by Agent**"
+          body = f"### 🤖 Agent PR Review\n\n{status_badge}\n\n{summary}\n"
+
+          if findings:
+              body += "\n#### Key Findings:\n" + "\n".join(f"- {f}" for f in findings)
+
+          body += "\n\n---\n*Evaluated against [AGENTS.md](AGENTS.md)*"
+
+          review_action = "--approve" if approved else "--request-changes"
+          cmd = ["gh", "pr", "review", pr_number, review_action, "--body", body]
+          subprocess.run(cmd)
+          EOF
