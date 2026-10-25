@@ -9,6 +9,10 @@ This document provides operational rules and guidelines for AI coding agents (AG
 - **Never push directly to main.**
   - Always develop within dedicated feature or bugfix branches (e.g., `feat/feature-name`, `fix/issue-description`).
   - All updates to `main` must arrive exclusively through Pull Requests.
+- **Pull Requests & Opt-in Agent Review**:
+  - Automated agent code reviews via CI are **opt-in** to conserve API tokens.
+  - To trigger an automated AI review on a Pull Request, include `[ai-review]` in the PR title or description, or apply the `ai-review` label.
+  - If `[ai-review]` is omitted, the automated review will be skipped.
 - **Always run tests and linters before reporting completion.**
   - Verify all changes locally: code must compile, pass existing unit/integration tests, and satisfy linter/formatter checks before concluding a task.
 - **Never create or commit mock API keys, tokens, or credentials.**
