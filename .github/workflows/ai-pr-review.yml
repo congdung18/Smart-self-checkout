@@ -2,7 +2,7 @@ name: Agent PR Review
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, edited, labeled]
 
 permissions:
   contents: read
@@ -11,6 +11,10 @@ permissions:
 
 jobs:
   ai-review:
+    if: >-
+      contains(github.event.pull_request.title, '[ai-review]') ||
+      contains(github.event.pull_request.body, '[ai-review]') ||
+      contains(github.event.pull_request.labels.*.name, 'ai-review')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository

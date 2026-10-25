@@ -37,4 +37,4 @@ The `main` branch is protected by repository rulesets (`Protect main branch (Tea
 ## Agentic Workflow & Guidelines
 
 - **AI Agent Guidelines**: Detailed development standards, safety principles, and commit message conventions for AI agents (AGY, Codex, etc.) are documented in [AGENTS.md](AGENTS.md).
-- **Automated AI Review Workflow**: CI automation located in [.github/workflows/ai-pr-review.yml](.github/workflows/ai-pr-review.yml) reviews incoming Pull Requests using Google Gemini, validating code diffs against project guidelines.
+- **Automated AI Review Workflow**: CI automation located in [.github/workflows/ai-pr-review.yml](.github/workflows/ai-pr-review.yml) reviews incoming Pull Requests using Google Gemini on demand. Tag your PR with `[ai-review]` in the title or description (or attach the `ai-review` label) to trigger automated agent reviews.
