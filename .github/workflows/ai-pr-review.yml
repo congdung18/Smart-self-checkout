@@ -96,41 +96,70 @@ jobs:
           }}
           """
 
-          # Use the stable universal model name for Google AI Studio
-          models_to_try = ["gemini-1.5-flash", "gemini-2.0-flash-exp", "gemini-1.5-pro"]
-          review_data = None
-          last_error = ""
+          # Dynamically query Google's ModelService to find available models for this key
+          models_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
+          available_models = []
+          try:
+              req = urllib.request.Request(models_url)
+              with urllib.request.urlopen(req) as resp:
+                  catalog = json.loads(resp.read().decode("utf-8"))
+                  for m in catalog.get("models", []):
+                      if "generateContent" in m.get("supportedGenerationMethods", []):
+                          available_models.append(m["name"])
+          except urllib.error.HTTPError as e:
+              err_body = e.read().decode("utf-8", errors="replace")
+              err_msg = f"### ⚠️ AI Review Encountered an Error\n\nFailed to list models with your API key: `{e}`\n\n```json\n{err_body}\n```"
+              subprocess.run(["gh", "pr", "comment", pr_number, "--body", err_msg])
+              sys.exit(0)
+          except Exception as e:
+              err_msg = f"### ⚠️ AI Review Encountered an Error\n\nFailed to connect to Google API: `{e}`"
+              subprocess.run(["gh", "pr", "comment", pr_number, "--body", err_msg])
+              sys.exit(0)
 
-          for model_name in models_to_try:
-              url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
-              payload = {
-                  "contents": [{"parts": [{"text": prompt}]}],
-                  "generationConfig": {"responseMimeType": "application/json"}
-              }
+          if not available_models:
+              err_msg = "### ⚠️ AI Review Encountered an Error\n\nNo models supporting `generateContent` were returned for this API key."
+              subprocess.run(["gh", "pr", "comment", pr_number, "--body", err_msg])
+              sys.exit(0)
 
-              req = urllib.request.Request(
-                  url,
-                  data=json.dumps(payload).encode("utf-8"),
-                  headers={"Content-Type": "application/json"},
-                  method="POST"
-              )
-
-              try:
-                  with urllib.request.urlopen(req) as resp:
-                      result = json.loads(resp.read().decode("utf-8"))
-                      raw_reply = result["candidates"][0]["content"]["parts"][0]["text"]
-                      review_data = json.loads(raw_reply)
+          # Sort/prefer flash models, then pro, then any available model
+          selected_model = None
+          for pref in ["flash", "pro", "gemini"]:
+              for m in available_models:
+                  if pref in m.lower():
+                      selected_model = m
                       break
-              except urllib.error.HTTPError as e:
-                  err_body = e.read().decode("utf-8", errors="replace")
-                  last_error = f"{e}: {err_body}"
-                  continue
-              except Exception as e:
-                  last_error = str(e)
-                  continue
+              if selected_model:
+                  break
+          if not selected_model:
+              selected_model = available_models[0]
 
-          if not review_data:
-              err_msg = f"### ⚠️ AI Review Encountered an Error\n\nFailed to call Gemini API across models: `{last_error}`"
+          # Call generateContent on the dynamically discovered model
+          # selected_model is already formatted as "models/<name>"
+          url = f"https://generativelanguage.googleapis.com/v1beta/{selected_model}:generateContent?key={api_key}"
+          payload = {
+              "contents": [{"parts": [{"text": prompt}]}],
+              "generationConfig": {"responseMimeType": "application/json"}
+          }
+
+          req = urllib.request.Request(
+              url,
+              data=json.dumps(payload).encode("utf-8"),
+              headers={"Content-Type": "application/json"},
+              method="POST"
+          )
+
+          try:
+              with urllib.request.urlopen(req) as resp:
+                  result = json.loads(resp.read().decode("utf-8"))
+                  raw_reply = result["candidates"][0]["content"]["parts"][0]["text"]
+                  review_data = json.loads(raw_reply)
+          except urllib.error.HTTPError as e:
+              err_body = e.read().decode("utf-8", errors="replace")
+              err_msg = f"### ⚠️ AI Review Encountered an Error\n\nModel `{selected_model}` failed with `{e}`:\n\n```json\n{err_body}\n```"
+              subprocess.run(["gh", "pr", "comment", pr_number, "--body", err_msg])
+              sys.exit(0)
+          except Exception as e:
+              err_msg = f"### ⚠️ AI Review Encountered an Error\n\nFailed to parse review response: `{e}`"
               subprocess.run(["gh", "pr", "comment", pr_number, "--body", err_msg])
               sys.exit(0)
 
