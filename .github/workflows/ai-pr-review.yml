@@ -2,7 +2,7 @@ name: Agent PR Review
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, edited, labeled]
 
 permissions:
   contents: read
@@ -11,6 +11,10 @@ permissions:
 
 jobs:
   ai-review:
+    if: >-
+      contains(github.event.pull_request.title, '[ai-review]') ||
+      contains(github.event.pull_request.body, '[ai-review]') ||
+      contains(github.event.pull_request.labels.*.name, 'ai-review')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -41,6 +45,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
         run: |
           python3 - << 'EOF'
           import os
@@ -52,6 +58,8 @@ jobs:
 
           api_key = os.environ.get("GEMINI_API_KEY", "").strip()
           pr_number = os.environ.get("PR_NUMBER", "")
+          pr_title = os.environ.get("PR_TITLE", "")
+          pr_body = os.environ.get("PR_BODY", "")
           agents_md = os.environ.get("AGENTS_MD", "")
 
           if not api_key:
@@ -75,23 +83,35 @@ jobs:
               diff_text = diff_text[:20000] + "\n\n...[diff truncated for length]..."
 
           prompt = f"""You are an automated senior code reviewer reviewing a GitHub Pull Request.
-          Strictly evaluate the changes against the project guidelines specified below in AGENTS.md.
+          Strictly evaluate the changes against the project guidelines specified below in AGENTS.md,
+          and provide a clear summary and file-by-file walkthrough of the pull request.
 
           ### Project Guidelines (AGENTS.md):
           {agents_md}
+
+          ### Pull Request Metadata:
+          - Title: {pr_title}
+          - Description: {pr_body}
 
           ### Git Diff:
           {diff_text}
 
           ### Tasks:
-          1. Verify safety rules (e.g. no secrets, mock keys, credentials).
-          2. Check commit conventions and code quality.
-          3. Determine if the PR should be approved or needs changes.
+          1. Provide a concise, clear high-level summary of what this PR introduces and accomplishes.
+          2. Provide a breakdown / walkthrough of the changes across modified files.
+          3. Verify safety rules (e.g. no secrets, mock keys, credentials).
+          4. Check commit conventions and code quality.
+          5. Determine if the PR should be approved or needs changes.
 
           Respond ONLY with valid JSON matching this schema:
           {{
             "approved": true or false,
-            "summary": "Short 2-3 sentence summary of the review verdict",
+            "verdict_summary": "Short 2-3 sentence summary of the review verdict and reasoning",
+            "pr_summary": "2-4 sentence overview explaining the purpose, scope, and key changes in this PR",
+            "changes_walkthrough": [
+              "path/to/file: description of changes in this file",
+              "path/to/another_file: description of changes in this file"
+            ],
             "findings": ["bullet point 1", "bullet point 2"]
           }}
           """
@@ -180,16 +200,24 @@ jobs:
               sys.exit(0)
 
           approved = review_data.get("approved", False)
-          summary = review_data.get("summary", "Review completed.")
+          verdict_summary = review_data.get("verdict_summary") or review_data.get("summary", "Review completed.")
+          pr_summary = review_data.get("pr_summary", "")
+          changes_walkthrough = review_data.get("changes_walkthrough", [])
           findings = review_data.get("findings", [])
 
           status_badge = "✅ **Approved by Agent**" if approved else "⚠️ **Changes Requested by Agent**"
-          body = f"### 🤖 Agent PR Review\n\n{status_badge}\n\n{summary}\n"
+          body = f"### 🤖 Agent PR Review\n\n{status_badge}\n\n{verdict_summary}\n"
+
+          if pr_summary:
+              body += f"\n#### 📝 PR Summary\n{pr_summary}\n"
+
+          if changes_walkthrough:
+              body += "\n#### 🔍 Changes Walkthrough\n" + "\n".join(f"- {c}" for c in changes_walkthrough) + "\n"
 
           if findings:
-              body += "\n#### Key Findings:\n" + "\n".join(f"- {f}" for f in findings)
+              body += "\n#### ⚠️ Findings & Recommendations\n" + "\n".join(f"- {f}" for f in findings) + "\n"
 
-          body += "\n\n---\n*Evaluated against [AGENTS.md](AGENTS.md)*"
+          body += "\n---\n*Evaluated against [AGENTS.md](AGENTS.md)*"
 
           review_action = "--approve" if approved else "--request-changes"
           cmd = ["gh", "pr", "review", pr_number, review_action, "--body", body]
