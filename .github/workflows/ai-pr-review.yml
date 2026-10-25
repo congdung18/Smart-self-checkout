@@ -121,45 +121,61 @@ jobs:
               subprocess.run(["gh", "pr", "comment", pr_number, "--body", err_msg])
               sys.exit(0)
 
-          # Sort/prefer flash models, then pro, then any available model
-          selected_model = None
-          for pref in ["flash", "pro", "gemini"]:
-              for m in available_models:
-                  if pref in m.lower():
-                      selected_model = m
+          # Sort and prioritize models (prefer gemini-3.8-flash as recommended by Google)
+          def model_score(name):
+              n = name.lower()
+              score = 0
+              if "3.8-flash" in n:
+                  score += 100
+              elif "3.8" in n:
+                  score += 90
+              elif "flash" in n:
+                  score += 50
+              elif "pro" in n:
+                  score += 40
+              if "2.5" in n or "1.5" in n:
+                  score -= 50
+              return score
+
+          candidate_models = sorted(available_models, key=model_score, reverse=True)
+          if "models/gemini-3.8-flash" not in candidate_models:
+              candidate_models.insert(0, "models/gemini-3.8-flash")
+
+          review_data = None
+          last_errors = []
+
+          for selected_model in candidate_models:
+              model_path = selected_model if selected_model.startswith("models/") else f"models/{selected_model}"
+              url = f"https://generativelanguage.googleapis.com/v1beta/{model_path}:generateContent?key={api_key}"
+              payload = {
+                  "contents": [{"parts": [{"text": prompt}]}],
+                  "generationConfig": {"responseMimeType": "application/json"}
+              }
+
+              req = urllib.request.Request(
+                  url,
+                  data=json.dumps(payload).encode("utf-8"),
+                  headers={"Content-Type": "application/json"},
+                  method="POST"
+              )
+
+              try:
+                  with urllib.request.urlopen(req) as resp:
+                      result = json.loads(resp.read().decode("utf-8"))
+                      raw_reply = result["candidates"][0]["content"]["parts"][0]["text"]
+                      review_data = json.loads(raw_reply)
+                      print(f"Successfully reviewed PR using model {model_path}")
                       break
-              if selected_model:
-                  break
-          if not selected_model:
-              selected_model = available_models[0]
+              except urllib.error.HTTPError as e:
+                  err_body = e.read().decode("utf-8", errors="replace")
+                  last_errors.append(f"{model_path}: {e} -> {err_body}")
+                  continue
+              except Exception as e:
+                  last_errors.append(f"{model_path}: {e}")
+                  continue
 
-          # Call generateContent on the dynamically discovered model
-          # selected_model is already formatted as "models/<name>"
-          url = f"https://generativelanguage.googleapis.com/v1beta/{selected_model}:generateContent?key={api_key}"
-          payload = {
-              "contents": [{"parts": [{"text": prompt}]}],
-              "generationConfig": {"responseMimeType": "application/json"}
-          }
-
-          req = urllib.request.Request(
-              url,
-              data=json.dumps(payload).encode("utf-8"),
-              headers={"Content-Type": "application/json"},
-              method="POST"
-          )
-
-          try:
-              with urllib.request.urlopen(req) as resp:
-                  result = json.loads(resp.read().decode("utf-8"))
-                  raw_reply = result["candidates"][0]["content"]["parts"][0]["text"]
-                  review_data = json.loads(raw_reply)
-          except urllib.error.HTTPError as e:
-              err_body = e.read().decode("utf-8", errors="replace")
-              err_msg = f"### ⚠️ AI Review Encountered an Error\n\nModel `{selected_model}` failed with `{e}`:\n\n```json\n{err_body}\n```"
-              subprocess.run(["gh", "pr", "comment", pr_number, "--body", err_msg])
-              sys.exit(0)
-          except Exception as e:
-              err_msg = f"### ⚠️ AI Review Encountered an Error\n\nFailed to parse review response: `{e}`"
+          if not review_data:
+              err_msg = "### ⚠️ AI Review Encountered an Error\n\nAll candidate models failed:\n\n" + "\n".join(f"- `{err}`" for err in last_errors[:3])
               subprocess.run(["gh", "pr", "comment", pr_number, "--body", err_msg])
               sys.exit(0)
 
