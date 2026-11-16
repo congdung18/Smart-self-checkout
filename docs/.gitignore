@@ -1,0 +1,6 @@
+# Only deployment and release plans are published.
+# Other documents remain local until explicitly requested.
+/*
+!/.gitignore
+!/report.md
+!/prototype

@@ -1,0 +1,6 @@
+node_modules
+dist
+.runtime
+package-lock.json
+docs/INDEX.md
+prisma/schema.prisma

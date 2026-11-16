@@ -1,0 +1,168 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Product {
+  id        String @id @default(uuid()) @db.Uuid
+  sku       String @unique @db.VarChar(64)
+  barcode   String @unique @db.VarChar(64)
+  name      String @db.VarChar(200)
+  price     Int
+  active    Boolean @default(true)
+  version   Int @default(1)
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @updatedAt @db.Timestamptz
+  stock Stock?
+  items CartItem[]
+  reservations Reservation[]
+  orderItems OrderItem[]
+}
+
+model Stock {
+  id String @id @default(uuid()) @db.Uuid
+  productId String @unique @db.Uuid
+  onHand Int
+  reserved Int @default(0)
+  product Product @relation(fields:[productId], references:[id], onDelete:Restrict)
+}
+
+model Cart {
+  id String @id @default(uuid()) @db.Uuid
+  ownerId String @db.VarChar(128)
+  status String @default("active") @db.VarChar(16)
+  version Int @default(1)
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @updatedAt @db.Timestamptz
+  items CartItem[]
+  payments Payment[]
+  order Order?
+  operations CartOperation[]
+  @@index([ownerId,createdAt])
+  @@index([status,updatedAt])
+}
+
+model CartItem {
+  id String @id @default(uuid()) @db.Uuid
+  cartId String @db.Uuid
+  productId String @db.Uuid
+  quantity Int
+  unitPrice Int
+  cart Cart @relation(fields:[cartId],references:[id],onDelete:Restrict)
+  product Product @relation(fields:[productId],references:[id],onDelete:Restrict)
+  @@unique([cartId,productId])
+  @@index([productId])
+}
+
+model CartOperation {
+  id String @id @default(uuid()) @db.Uuid
+  cartId String @db.Uuid
+  key String @db.VarChar(128)
+  digest String @db.VarChar(64)
+  cart Cart @relation(fields:[cartId],references:[id],onDelete:Restrict)
+  @@unique([cartId,key])
+}
+
+model Payment {
+  id String @id @default(uuid()) @db.Uuid
+  cartId String @db.Uuid
+  key String @db.VarChar(128)
+  digest String @db.VarChar(64)
+  amount Int
+  currency String @default("VND") @db.VarChar(3)
+  status String @default("initiating") @db.VarChar(16)
+  completion String @default("waiting") @db.VarChar(32)
+  scenario String @db.VarChar(16)
+  snapshot Json
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @updatedAt @db.Timestamptz
+  cart Cart @relation(fields:[cartId],references:[id],onDelete:Restrict)
+  reservations Reservation[]
+  events PaymentEvent[]
+  order Order?
+  @@unique([cartId,key])
+  @@index([status,updatedAt])
+}
+
+model Reservation {
+  id String @id @default(uuid()) @db.Uuid
+  paymentId String @db.Uuid
+  productId String @db.Uuid
+  quantity Int
+  status String @default("held") @db.VarChar(16)
+  payment Payment @relation(fields:[paymentId],references:[id],onDelete:Restrict)
+  product Product @relation(fields:[productId],references:[id],onDelete:Restrict)
+  @@unique([paymentId,productId])
+  @@index([productId,status])
+}
+
+model Order {
+  id String @id @default(uuid()) @db.Uuid
+  cartId String @unique @db.Uuid
+  paymentId String @unique @db.Uuid
+  amount Int
+  completedAt DateTime @default(now()) @db.Timestamptz
+  cart Cart @relation(fields:[cartId],references:[id],onDelete:Restrict)
+  payment Payment @relation(fields:[paymentId],references:[id],onDelete:Restrict)
+  items OrderItem[]
+}
+
+model OrderItem {
+  id String @id @default(uuid()) @db.Uuid
+  orderId String @db.Uuid
+  productId String @db.Uuid
+  name String @db.VarChar(200)
+  sku String @db.VarChar(64)
+  barcode String @db.VarChar(64)
+  unitPrice Int
+  quantity Int
+  order Order @relation(fields:[orderId],references:[id],onDelete:Restrict)
+  product Product @relation(fields:[productId],references:[id],onDelete:Restrict)
+  movement StockMovement?
+  @@index([orderId])
+  @@index([productId])
+}
+
+model StockMovement {
+  id String @id @default(uuid()) @db.Uuid
+  orderItemId String @unique @db.Uuid
+  quantity Int
+  item OrderItem @relation(fields:[orderItemId],references:[id],onDelete:Restrict)
+}
+
+model PaymentEvent {
+  id String @id @db.Uuid
+  paymentId String @db.Uuid
+  status String @db.VarChar(16)
+  digest String @db.VarChar(64)
+  createdAt DateTime @default(now()) @db.Timestamptz
+  payment Payment @relation(fields:[paymentId],references:[id],onDelete:Restrict)
+  @@index([paymentId])
+}
+
+model User {
+  id String @id @default(uuid()) @db.Uuid
+  username String @unique @db.VarChar(100)
+  passwordHash String
+  role String @db.VarChar(16)
+}
+
+model Session {
+  sid String @id @db.VarChar
+  sess Json @db.Json
+  expire DateTime @db.Timestamp(6)
+  @@index([expire])
+  @@map("session")
+}
+
+model GatewayPayment {
+  id String @id @db.Uuid
+  amount Int
+  currency String @db.VarChar(3)
+  status String @default("pending") @db.VarChar(16)
+  scenario String @db.VarChar(16)
+  createdAt DateTime @default(now()) @db.Timestamptz
+}
