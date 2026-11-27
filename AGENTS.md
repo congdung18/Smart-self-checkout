@@ -44,8 +44,16 @@ action: brief introduction
 
 ---
 
-## 3. Code Quality & Architecture
+## 3. Code Quality, Architecture & Spec Compliance
 
+- **Spec-First Compliance (Mandatory)**:
+  - Before writing or modifying any code, **must read the active phase specification file (`docs/ssc-phasex.md`, e.g., `docs/ssc-phase1.md`) first**.
+  - Strictly obey the workflows, database schema, API contracts, and scope boundaries defined in that plan file. **Do not cross or deviate from it** without explicit approval.
+- **No Hardcoding**:
+  - Never hardcode configuration values, URLs, bank/merchant details, ports, secrets, or magic numbers in source code. Externalize all configuration to environment variables (with placeholders in `.env.example`) or dedicated config modules.
+- **Maintainability & Scalable Design**:
+  - Write clean, modular, maintainable code with clear separation of concerns (routes/controllers, services, data access).
+  - Choose scalable designs and approaches (e.g., atomic database operations, idempotent handlers, indexed queries, reusable helpers) rather than quick hacks.
 - **Scope Discipline**: Keep changes clean, minimal, and focused on the immediate task. Avoid reformatting unrelated files or touching unrequested components.
 - **Input Validation**: Validate inputs at system boundaries (API endpoints, CLI inputs, external payloads).
 - **Clean State**: Ensure no leftover debug statements, temporary logs, or scratch files are committed.
