@@ -149,3 +149,16 @@ CREATE INDEX idx_order_items_order_id ON order_items(order_id);
 2. **Server-Authoritative Pricing**: Client never sends prices; all totals are computed server-side in integer `VND`.
 3. **Immutable Purchase Snapshots**: `order_items` freezes `product_name` and `unit_price` at checkout.
 4. **Idempotent Webhooks**: Duplicate bank callbacks never decrement stock twice.
+
+---
+
+## 5. Team Roles & Responsibilities (4-Person Split)
+
+To enable parallel development with clear Git attribution and zero merge conflicts, Phase 1 is divided into **4 independent roles**:
+
+| Role | Primary Ownership | Core Responsibilities | Definition of Done (DoD) |
+| :--- | :--- | :--- | :--- |
+| **1. Platform / DevOps** | Infra, Database & CI/CD | • Configure `compose.yaml` (PostgreSQL 16 + healthcheck) and `.env.example` (no hardcoded secrets).<br>• Implement SQL migrations for the 7 Phase 1 tables and `seed.sql` (sample Vietnamese products & barcodes).<br>• Set up GitHub Actions `ci.yml` (lint, type-check, test runner) and staging deployment. | `docker compose up` boots a seeded database in one command; CI runs automatically on every PR. |
+| **2. Backend** | Core API & Business Logic | • Implement `/carts/*` endpoints (`POST /carts`, `POST/PATCH/DELETE /carts/{id}/items`).<br>• Implement `POST /orders/checkout` with `Idempotency-Key`, 5-min `expires_at`, and VietQR payload/deep-link generation.<br>• Implement `GET /orders/{id}/status` (lazy TTL expiry) and `POST /webhooks/payment` (HMAC verification, idempotent stock decrement, Exit QR generation). | All REST endpoints match Section 3 contracts; zero hardcoded config; server calculates all VND totals atomically. |
+| **3. Frontend (Mobile)** | Shopper Mobile App / PWA | • Build mobile-first portrait UI (`375px–430px`) with camera barcode scanner (`@zxing/browser` / `html5-qrcode`) and 500ms scan debounce.<br>• Implement audio/haptic scan feedback and Cart UI (add, edit qty, remove, abandon).<br>• Implement Payment screen (VietQR + Bank Deep Link + 2s status polling) and Exit QR receipt / TTL expired screens. | Shopper can scan an item, manage cart, trigger VietQR payment, and view the Exit QR or timeout state end-to-end on mobile. |
+| **4. QA / Test & Simulation** | Verification & Demo Harness | • Write API integration tests covering all 4 workflows (`404` unknown barcode, cart recalculation, idempotent duplicate webhooks, 5-min TTL expiry).<br>• Write E2E smoke tests for the golden checkout path.<br>• Build/verify the demo payment simulation flow (`POST /orders/{id}/pay`) and mock webhook test scripts for reliable presentations. | Automated test suite verifies all Phase 1 workflows and edge cases in CI; demo simulation works reliably offline/on campus Wi-Fi. |
